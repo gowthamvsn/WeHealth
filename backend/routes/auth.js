@@ -1,10 +1,86 @@
 const express = require('express');
 const jwt = require('jsonwebtoken');
+const bcrypt = require('bcryptjs');
 const { v4: uuidv4 } = require('uuid');
 const pool = require('../db');
 const sendEmail = require('../utils/sendEmail');
 
 const router = express.Router();
+
+// POST /register
+router.post('/register', async (req, res) => {
+  const { email, username, password } = req.body;
+
+  if (!email || !username || !password) {
+    return res.status(400).json({ error: 'Email, username, and password are required' });
+  }
+
+  try {
+    // Check if user already exists
+    const existingUser = await pool.query(
+      'SELECT * FROM users WHERE email = $1 OR username = $2',
+      [email, username]
+    );
+    if (existingUser.rows.length > 0) {
+      return res.status(400).json({ error: 'User with this email or username already exists' });
+    }
+
+    // Hash password
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    // Create user
+    const userId = uuidv4();
+    await pool.query(
+      'INSERT INTO users (user_id, email, username, password, created_at, updated_at) VALUES ($1, $2, $3, $4, NOW(), NOW())',
+      [userId, email, username, hashedPassword]
+    );
+
+    res.status(201).json({ message: 'User registered successfully' });
+  } catch (error) {
+    console.error('Error registering user:', error);
+    res.status(500).json({ error: 'Failed to register user' });
+  }
+});
+
+// POST /login
+router.post('/login', async (req, res) => {
+  const { identifier, password } = req.body; // identifier can be email or username
+
+  if (!identifier || !password) {
+    return res.status(400).json({ error: 'Identifier (email/username) and password are required' });
+  }
+
+  try {
+    // Find user by email or username
+    const userResult = await pool.query(
+      'SELECT * FROM users WHERE email = $1 OR username = $1',
+      [identifier]
+    );
+    if (userResult.rows.length === 0) {
+      return res.status(400).json({ error: 'Invalid credentials' });
+    }
+
+    const user = userResult.rows[0];
+
+    // Check password
+    const isValidPassword = await bcrypt.compare(password, user.password);
+    if (!isValidPassword) {
+      return res.status(400).json({ error: 'Invalid credentials' });
+    }
+
+    // Generate JWT
+    const token = jwt.sign(
+      { userId: user.user_id, email: user.email, username: user.username },
+      process.env.JWT_SECRET,
+      { expiresIn: '24h' }
+    );
+
+    res.json({ token, user: { user_id: user.user_id, email: user.email, username: user.username } });
+  } catch (error) {
+    console.error('Error logging in:', error);
+    res.status(500).json({ error: 'Failed to login' });
+  }
+});
 
 // POST /request-otp
 router.post('/request-otp', async (req, res) => {

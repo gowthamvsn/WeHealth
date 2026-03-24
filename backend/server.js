@@ -6,6 +6,7 @@ const cors = require("cors");
 
 const symptomRoutes = require("./routes/symptoms");
 const authRoutes = require("./routes/auth");
+const { authenticateToken } = require("./middleware/auth");
 
 const app = express();
 
@@ -13,8 +14,8 @@ app.use(cors());
 app.use(express.json());
 
 
-app.use("/symptoms", symptomRoutes);
-app.use("/menotype", menotypeRoutes);
+app.use("/symptoms", authenticateToken, symptomRoutes);
+app.use("/menotype", authenticateToken, menotypeRoutes);
 app.use("/auth", authRoutes);
 const PORT = 3000;
 
