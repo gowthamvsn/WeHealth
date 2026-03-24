@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WE Health - Login & Register</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+    .container {
+      background: white;
+      border-radius: 12px;
+      box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+      max-width: 450px;
+      width: 100%;
+      padding: 40px;
+    }
+    h1 {
+      color: #333;
+      margin-bottom: 30px;
+      text-align: center;
+      font-size: 28px;
+    }
+    .form-group {
+      margin-bottom: 20px;
+    }
+    label {
+      display: block;
+      margin-bottom: 8px;
+      color: #555;
+      font-weight: 500;
+      font-size: 14px;
+    }
+    input {
+      width: 100%;
+      padding: 12px;
+      border: 2px solid #e0e0e0;
+      border-radius: 6px;
+      font-size: 14px;
+      transition: border-color 0.3s;
+    }
+    input:focus {
+      outline: none;
+      border-color: #667eea;
+    }
+    button {
+      width: 100%;
+      padding: 12px;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      border: none;
+      border-radius: 6px;
+      font-size: 16px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: transform 0.2s;
+    }
+    button:hover { transform: translateY(-2px); }
+    button:active { transform: translateY(0); }
+    .tabs {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 30px;
+      border-bottom: 2px solid #e0e0e0;
+    }
+    .tab-btn {
+      flex: 1;
+      padding: 12px;
+      background: none;
+      border: none;
+      border-bottom: 3px solid transparent;
+      color: #999;
+      cursor: pointer;
+      font-weight: 600;
+      transition: all 0.3s;
+    }
+    .tab-btn.active {
+      color: #667eea;
+      border-bottom-color: #667eea;
+    }
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+    .message {
+      padding: 12px;
+      border-radius: 6px;
+      margin-bottom: 20px;
+      text-align: center;
+      font-size: 14px;
+    }
+    .message.success {
+      background: #d4edda;
+      color: #155724;
+      border: 1px solid #c3e6cb;
+    }
+    .message.error {
+      background: #f8d7da;
+      color: #721c24;
+      border: 1px solid #f5c6cb;
+    }
+    .toggle-link {
+      text-align: center;
+      margin-top: 20px;
+      font-size: 14px;
+    }
+    .toggle-link a {
+      color: #667eea;
+      cursor: pointer;
+      text-decoration: none;
+      font-weight: 600;
+    }
+    .toggle-link a:hover { text-decoration: underline; }
+    .logged-in {
+      text-align: center;
+      display: none;
+    }
+    .logged-in h2 {
+      color: #333;
+      margin-bottom: 20px;
+    }
+    .user-info {
+      background: #f5f5f5;
+      padding: 20px;
+      border-radius: 6px;
+      margin-bottom: 20px;
+      text-align: left;
+    }
+    .user-info p {
+      margin: 8px 0;
+      color: #666;
+      font-size: 14px;
+    }
+    .user-info strong { color: #333; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <!-- Auth Forms -->
+    <div id="authSection">
+      <div class="tabs">
+        <button class="tab-btn active" onclick="switchTab('login')">Login</button>
+        <button class="tab-btn" onclick="switchTab('register')">Register</button>
+        <button class="tab-btn" onclick="switchTab('forgot')">Forgot Password</button>
+      </div>
+
+      <!-- Login Form -->
+      <div id="login" class="tab-content active">
+        <h1>Login</h1>
+        <div id="loginMessage"></div>
+        <form onsubmit="handleLogin(event)">
+          <div class="form-group">
+            <label for="loginIdentifier">Email or Username</label>
+            <input type="text" id="loginIdentifier" required>
+          </div>
+          <div class="form-group">
+            <label for="loginPassword">Password</label>
+            <input type="password" id="loginPassword" required>
+          </div>
+          <button type="submit">Login</button>
+        </form>
+      </div>
+
+      <!-- Register Form -->
+      <div id="register" class="tab-content">
+        <h1>Register</h1>
+        <div id="registerMessage"></div>
+        <form onsubmit="handleRegister(event)">
+          <div class="form-group">
+            <label for="regEmail">Email</label>
+            <input type="email" id="regEmail" required>
+          </div>
+          <div class="form-group">
+            <label for="regUsername">Username</label>
+            <input type="text" id="regUsername" required>
+          </div>
+          <div class="form-group">
+            <label for="regPassword">Password</label>
+            <input type="password" id="regPassword" required>
+          </div>
+          <button type="submit">Register</button>
+        </form>
+      </div>
+
+      <!-- Forgot Password Form -->
+      <div id="forgot" class="tab-content">
+        <h1>Reset Password</h1>
+        <div id="forgotMessage"></div>
+        <div id="forgotStep1">
+          <h3 style="margin-bottom: 20px; color: #333;">Step 1: Request OTP</h3>
+          <form onsubmit="handleForgotPassword(event)">
+            <div class="form-group">
+              <label for="forgotEmail">Email</label>
+              <input type="email" id="forgotEmail" required>
+            </div>
+            <button type="submit">Send OTP</button>
+          </form>
+        </div>
+        <div id="forgotStep2" style="display: none;">
+          <h3 style="margin-bottom: 20px; color: #333;">Step 2: Reset Password</h3>
+          <form onsubmit="handleResetPassword(event)">
+            <div class="form-group">
+              <label for="resetOtp">OTP</label>
+              <input type="text" id="resetOtp" required>
+            </div>
+            <div class="form-group">
+              <label for="resetNewPassword">New Password</label>
+              <input type="password" id="resetNewPassword" required>
+            </div>
+            <button type="submit">Reset Password</button>
+          </form>
+        </div>
+      </div>
+    </div>
+
+    <!-- Logged In Section -->
+    <div id="loggedInSection" class="logged-in">
+      <h2>Welcome!</h2>
+      <div class="user-info">
+        <p><strong>User ID:</strong> <span id="userId"></span></p>
+        <p><strong>Email:</strong> <span id="userEmail"></span></p>
+        <p><strong>Username:</strong> <span id="userUsername"></span></p>
+        <p><strong>Token:</strong><br><span id="userToken" style="word-break: break-all; font-size: 12px;"></span></p>
+      </div>
+      <button onclick="logout()">Logout</button>
+    </div>
+  </div>
+
+  <script src="script.js"></script>
+</body>
+</html>

@@ -170,4 +170,78 @@ router.post('/verify-otp', async (req, res) => {
   }
 });
 
+// POST /forgot-password
+router.post('/forgot-password', async (req, res) => {
+  const { email } = req.body;
+
+  if (!email) {
+    return res.status(400).json({ error: 'Email is required' });
+  }
+
+  try {
+    // Check if user exists
+    const userResult = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
+    if (userResult.rows.length === 0) {
+      return res.status(400).json({ error: 'User with this email does not exist' });
+    }
+
+    // Generate OTP for password reset
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const expiresAt = new Date(Date.now() + 15 * 60 * 1000); // 15 minutes
+
+    // Store OTP in users table
+    await pool.query(
+      'UPDATE users SET reset_token = $1, reset_token_expires_at = $2 WHERE email = $3',
+      [otp, expiresAt, email]
+    );
+
+    // Send email with OTP
+    await sendEmail(
+      email,
+      'Password Reset OTP for WE Health',
+      `Your password reset OTP is: ${otp}. It expires in 15 minutes.`
+    );
+
+    res.json({ message: 'Password reset OTP sent to your email' });
+  } catch (error) {
+    console.error('Error requesting password reset:', error);
+    res.status(500).json({ error: 'Failed to send password reset OTP' });
+  }
+});
+
+// POST /reset-password
+router.post('/reset-password', async (req, res) => {
+  const { email, otp, newPassword } = req.body;
+
+  if (!email || !otp || !newPassword) {
+    return res.status(400).json({ error: 'Email, OTP, and new password are required' });
+  }
+
+  try {
+    // Check if user exists and verify OTP
+    const userResult = await pool.query(
+      'SELECT * FROM users WHERE email = $1 AND reset_token = $2 AND reset_token_expires_at > NOW()',
+      [email, otp]
+    );
+
+    if (userResult.rows.length === 0) {
+      return res.status(400).json({ error: 'Invalid or expired OTP' });
+    }
+
+    // Hash new password
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+
+    // Update password and clear reset tokens
+    await pool.query(
+      'UPDATE users SET password = $1, reset_token = NULL, reset_token_expires_at = NULL, updated_at = NOW() WHERE email = $2',
+      [hashedPassword, email]
+    );
+
+    res.json({ message: 'Password reset successfully' });
+  } catch (error) {
+    console.error('Error resetting password:', error);
+    res.status(500).json({ error: 'Failed to reset password' });
+  }
+});
+
 module.exports = router;
