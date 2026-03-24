@@ -195,14 +195,22 @@ router.post('/forgot-password', async (req, res) => {
       [otp, expiresAt, email]
     );
 
-    // Send email with OTP
-    await sendEmail(
-      email,
-      'Password Reset OTP for WE Health',
-      `Your password reset OTP is: ${otp}. It expires in 15 minutes.`
-    );
+    // Try to send email (optional - for testing, just return OTP)
+    if (process.env.EMAIL_USER && process.env.EMAIL_PASS) {
+      try {
+        await sendEmail(
+          email,
+          'Password Reset OTP for WE Health',
+          `Your password reset OTP is: ${otp}. It expires in 15 minutes.`
+        );
+      } catch (emailError) {
+        console.warn('Email sending failed, but OTP stored:', emailError.message);
+      }
+    } else {
+      console.log(`[TEST MODE] Password reset OTP for ${email}: ${otp}`);
+    }
 
-    res.json({ message: 'Password reset OTP sent to your email' });
+    res.json({ message: 'Password reset OTP sent to your email', otp: process.env.NODE_ENV !== 'production' ? otp : undefined });
   } catch (error) {
     console.error('Error requesting password reset:', error);
     res.status(500).json({ error: 'Failed to send password reset OTP' });
