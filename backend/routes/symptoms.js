@@ -23,43 +23,87 @@ router.post("/women-like-me", async (req, res) => {
       return res.status(400).json({ error: "Symptoms array is required" });
     }
 
-    // Resolve each input symptom to a canonical dictionary entry via case-insensitive LIKE.
-    const resolvedSymptoms = [];
+    // Normalize input symptoms using exact + LIKE matching.
+    const inputCanonicalSymptoms = [];
+    const inputCanonicalSymptomsLower = [];
     for (const symptom of symptoms) {
-      const matchQuery = await pool.query(
-        `SELECT symptom_id, canonical_symptom
-         FROM symptom_dictionary
-         WHERE LOWER(canonical_symptom) LIKE $1
-         ORDER BY symptom_id
+      const rawLower = String(symptom).toLowerCase().trim();
+      const fuzzyToken = `%${rawLower}%`;
+      
+      let mappingResult = await pool.query(
+        `SELECT canonical_symptom
+         FROM symptom_mapping
+         WHERE LOWER(raw_symptom) = $1
+            OR LOWER(raw_symptom) LIKE $2
+            OR $1 LIKE ('%' || LOWER(raw_symptom) || '%')
+         ORDER BY
+           CASE
+             WHEN LOWER(raw_symptom) = $1 THEN 0
+             WHEN LOWER(raw_symptom) LIKE $2 THEN 1
+             ELSE 2
+           END,
+           LENGTH(raw_symptom) ASC
          LIMIT 1`,
-        [`%${String(symptom).toLowerCase().trim()}%`]
+        [rawLower, fuzzyToken]
       );
+      
+      if (mappingResult.rows.length > 0) {
+        const canonical = mappingResult.rows[0].canonical_symptom;
+        if (!inputCanonicalSymptoms.includes(canonical)) {
+          inputCanonicalSymptoms.push(canonical);
+          inputCanonicalSymptomsLower.push(canonical.toLowerCase());
+        }
+      } else {
+        if (/\b(gut|stomach|abdomen|acid|acidity|bloat|bloating|indigestion|digestive)\b/i.test(rawLower)) {
+          if (!inputCanonicalSymptomsLower.includes("digestive issues")) {
+            inputCanonicalSymptoms.push("digestive issues");
+            inputCanonicalSymptomsLower.push("digestive issues");
+          }
+          continue;
+        }
 
-      if (matchQuery.rows.length === 0) {
-        return res.status(400).json({
-          error: `No matching symptom found for input: ${symptom}`
-        });
+        // Fallback to LIKE match on symptom_dictionary
+        let dictResult = await pool.query(
+          `SELECT canonical_symptom
+           FROM symptom_dictionary
+           WHERE LOWER(canonical_symptom) LIKE $1
+              OR $2 LIKE ('%' || LOWER(canonical_symptom) || '%')
+            ORDER BY LENGTH(canonical_symptom) ASC, symptom_id ASC
+           LIMIT 1`,
+          [fuzzyToken, rawLower]
+        );
+        
+        if (dictResult.rows.length > 0) {
+          const canonical = dictResult.rows[0].canonical_symptom;
+          if (!inputCanonicalSymptoms.includes(canonical)) {
+            inputCanonicalSymptoms.push(canonical);
+            inputCanonicalSymptomsLower.push(canonical.toLowerCase());
+          }
+        } else {
+          return res.status(400).json({
+            error: `No matching symptom found for: ${symptom}`
+          });
+        }
       }
-
-      resolvedSymptoms.push(matchQuery.rows[0]);
     }
 
-    // Deduplicate IDs in case multiple inputs resolve to the same canonical symptom.
-    const symptomIds = [...new Set(resolvedSymptoms.map(row => row.symptom_id))];
-    const inputCanonicalSymptoms = [...new Set(resolvedSymptoms.map(row => row.canonical_symptom))];
-
-    // Build cohort: entries that contain ALL selected symptoms.
+    // Find users with ALL input symptoms from normalized check-ins.
     const cohortQuery = await pool.query(
-      `SELECT entry_id
-       FROM entry_symptoms_normalized
-       WHERE symptom_id = ANY($1)
-       GROUP BY entry_id
-       HAVING COUNT(DISTINCT symptom_id) = $2`,
-      [symptomIds, symptomIds.length]
+      `WITH user_symptoms AS (
+         SELECT uc.user_id,
+                ARRAY_AGG(DISTINCT LOWER(symptom)) AS symptom_list
+         FROM user_checkins uc
+         CROSS JOIN LATERAL unnest(uc.symptoms) AS symptom
+         GROUP BY uc.user_id
+       )
+       SELECT user_id
+       FROM user_symptoms
+       WHERE symptom_list @> $1::TEXT[]`,
+      [inputCanonicalSymptomsLower]
     );
 
-    const entryIds = cohortQuery.rows.map(row => row.entry_id);
-    const similarUsers = entryIds.length;
+    const similarUserIds = cohortQuery.rows.map(row => row.user_id);
+    const similarUsers = similarUserIds.length;
 
     if (similarUsers === 0) {
       return res.json({
@@ -71,43 +115,25 @@ router.post("/women-like-me", async (req, res) => {
       });
     }
 
-    // Most common co-occurring symptoms in the cohort, excluding input symptoms.
+    // Find co-occurring symptoms in the cohort (excluding input symptoms)
     const topSymptomsQuery = await pool.query(
-      `SELECT sd.canonical_symptom, COUNT(*)::int AS count
-       FROM entry_symptoms_normalized es
-       JOIN symptom_dictionary sd ON es.symptom_id = sd.symptom_id
-       WHERE es.entry_id = ANY($1)
-         AND es.symptom_id <> ALL($2)
-       GROUP BY sd.canonical_symptom
+      `SELECT symptom AS canonical_symptom, COUNT(*)::int AS count
+       FROM (
+         SELECT DISTINCT uc.user_id, LOWER(s) AS symptom
+         FROM user_checkins uc
+         CROSS JOIN LATERAL unnest(uc.symptoms) AS s
+         WHERE uc.user_id = ANY($1)
+       ) sq
+       WHERE symptom <> ALL($2::TEXT[])
+       GROUP BY symptom
        ORDER BY count DESC
        LIMIT 10`,
-      [entryIds, symptomIds]
+      [similarUserIds, inputCanonicalSymptomsLower]
     );
 
-    // Top treatments in the cohort.
-    const topTreatmentsQuery = await pool.query(
-      `SELECT td.canonical_treatment, COUNT(*)::int AS count
-       FROM treatment_events_normalized te
-       JOIN treatment_dictionary td ON te.treatment_id = td.treatment_id
-       WHERE te.entry_id = ANY($1)
-       GROUP BY td.canonical_treatment
-       ORDER BY count DESC
-       LIMIT 10`,
-      [entryIds]
-    );
-
-    // Treatment success rates in the cohort.
-    const successRatesQuery = await pool.query(
-      `SELECT td.canonical_treatment,
-              SUM(CASE WHEN te.worked = true THEN 1 ELSE 0 END)::int AS worked,
-              COUNT(*)::int AS total
-       FROM treatment_events_normalized te
-       JOIN treatment_dictionary td ON te.treatment_id = td.treatment_id
-       WHERE te.entry_id = ANY($1)
-       GROUP BY td.canonical_treatment
-       ORDER BY total DESC`,
-      [entryIds]
-    );
+    // V1 does not store treatment events per user check-in yet.
+    const topTreatmentsQuery = { rows: [] };
+    const successRatesQuery = { rows: [] };
 
     res.json({
       input_symptoms: inputCanonicalSymptoms,
@@ -118,8 +144,8 @@ router.post("/women-like-me", async (req, res) => {
     });
 
   } catch (err) {
-    console.error(err);
-    res.status(500).send("Server error");
+    console.error("Women-like-me error:", err);
+    res.status(500).json({ error: "Server error" });
   }
 });
 

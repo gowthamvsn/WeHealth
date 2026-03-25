@@ -7,6 +7,8 @@ const path = require("path");
 
 const symptomRoutes = require("./routes/symptoms");
 const authRoutes = require("./routes/auth");
+const checkinsRoutes = require("./routes/checkins");
+const communityRoutes = require("./routes/community");
 const { authenticateToken } = require("./middleware/auth");
 
 const app = express();
@@ -24,6 +26,8 @@ app.get('/', (req, res) => {
 
 app.use("/symptoms", authenticateToken, symptomRoutes);
 app.use("/menotype", authenticateToken, menotypeRoutes);
+app.use("/checkins", authenticateToken, checkinsRoutes);
+app.use("/community", authenticateToken, communityRoutes);
 app.use("/auth", authRoutes);
 const PORT = 3000;
 
@@ -33,6 +37,10 @@ app.listen(PORT, () => {
 
 const pool = require("./db");
 
-pool.query("SELECT current_database()", (err, res) => {
-  console.log("Connected to DB:", res.rows[0].current_database);
+pool.query("SELECT current_database()", (err, result) => {
+  if (err) {
+    console.error("Database connection check failed:", err.message);
+    return;
+  }
+  console.log("Connected to DB:", result.rows[0].current_database);
 });

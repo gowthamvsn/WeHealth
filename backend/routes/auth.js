@@ -35,7 +35,23 @@ router.post('/register', async (req, res) => {
       [userId, email, username, hashedPassword]
     );
 
-    res.status(201).json({ message: 'User registered successfully' });
+    // Generate OTP for registration verification (shown in UI while email is not configured).
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+
+    await pool.query('DELETE FROM otp_codes WHERE email = $1', [email]);
+    await pool.query(
+      'INSERT INTO otp_codes (email, otp, expires_at) VALUES ($1, $2, NOW() + INTERVAL \'15 minutes\')',
+      [email, otp]
+    );
+
+    const expiresAt = new Date(Date.now() + 15 * 60 * 1000);
+    console.log(`[TEST MODE] Registration OTP for ${email}: ${otp}`);
+
+    res.status(201).json({
+      message: 'User created. Verify your email with OTP.',
+      otp,
+      expires_at: expiresAt
+    });
   } catch (error) {
     console.error('Error registering user:', error);
     res.status(500).json({ error: 'Failed to register user' });
@@ -167,6 +183,33 @@ router.post('/verify-otp', async (req, res) => {
   } catch (error) {
     console.error('Error verifying OTP:', error);
     res.status(500).json({ error: 'Failed to verify OTP' });
+  }
+});
+
+// POST /verify-registration-otp
+router.post('/verify-registration-otp', async (req, res) => {
+  const { email, otp } = req.body;
+
+  if (!email || !otp) {
+    return res.status(400).json({ error: 'Email and OTP are required' });
+  }
+
+  try {
+    const result = await pool.query(
+      'SELECT 1 FROM otp_codes WHERE email = $1 AND otp = $2 AND expires_at > NOW()',
+      [email, otp]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(400).json({ error: 'Invalid or expired OTP' });
+    }
+
+    await pool.query('DELETE FROM otp_codes WHERE email = $1', [email]);
+
+    res.json({ message: 'Email verified successfully. You can now login.' });
+  } catch (error) {
+    console.error('Error verifying registration OTP:', error);
+    res.status(500).json({ error: 'Failed to verify registration OTP' });
   }
 });
 
