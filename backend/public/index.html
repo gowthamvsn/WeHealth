@@ -265,16 +265,127 @@
       padding-top: 10px;
     }
 
+    .landing {
+      position: relative;
+      overflow: hidden;
+      margin-bottom: 16px;
+      padding: 28px;
+      background: linear-gradient(145deg, #ffe8f1 0%, #ffd7ea 52%, #ffc7e2 100%);
+      border-color: #efbdd3;
+    }
+
+    .landing-glow {
+      position: absolute;
+      width: 260px;
+      height: 260px;
+      border-radius: 999px;
+      filter: blur(18px);
+      opacity: 0.35;
+      pointer-events: none;
+    }
+
+    .landing-glow.one {
+      background: #ff7eb8;
+      top: -90px;
+      right: -60px;
+    }
+
+    .landing-glow.two {
+      background: #ff9fcd;
+      bottom: -110px;
+      left: -60px;
+    }
+
+    .landing-wrap {
+      position: relative;
+      z-index: 1;
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 18px;
+    }
+
+    .landing-main {
+      text-align: center;
+    }
+
+    .hero-title {
+      margin: 0;
+      font-size: 40px;
+      line-height: 1.1;
+      color: #6a1f47;
+    }
+
+    .hero-short {
+      margin: 14px auto 0;
+      color: #7d3154;
+      font-size: 18px;
+      max-width: 620px;
+      text-align: center;
+    }
+
+    .symbol-row {
+      display: flex;
+      justify-content: center;
+      gap: 14px;
+      flex-wrap: wrap;
+    }
+
+    .symbol-pill {
+      border: 1px solid #e9aeca;
+      background: rgba(255, 255, 255, 0.75);
+      color: #7a2f52;
+      border-radius: 999px;
+      padding: 10px 14px;
+      font-size: 22px;
+      min-width: 54px;
+      text-align: center;
+    }
+
+    .landing-cta-row {
+      display: flex;
+      justify-content: center;
+      margin-top: 4px;
+    }
+
+    .landing-btn {
+      width: auto;
+      background: #d75496;
+      min-width: 190px;
+    }
+
     @media (max-width: 900px) {
       body { padding: 14px; }
       .grid { grid-template-columns: 1fr; }
       .app-header { align-items: flex-start; flex-direction: column; }
+      .hero-title { font-size: 31px; }
+      .hero-short { font-size: 16px; }
     }
   </style>
 </head>
 <body>
   <div class="shell">
-    <section id="authSection" class="card auth">
+    <section id="landingSection" class="card landing">
+      <div class="landing-glow one"></div>
+      <div class="landing-glow two"></div>
+      <div class="landing-wrap">
+        <div class="landing-main">
+          <h1 class="hero-title">There are women like you.</h1>
+          <p class="hero-short">We help each other.</p>
+          <div class="symbol-row" aria-hidden="true">
+            <div class="symbol-pill">♀</div>
+            <div class="symbol-pill">❤</div>
+            <div class="symbol-pill">∞</div>
+            <div class="symbol-pill">✿</div>
+            <div class="symbol-pill">☾</div>
+          </div>
+          <div class="landing-cta-row">
+            <button class="btn landing-btn" onclick="openAuth('register')">Join The Circle</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="authSection" class="card auth" style="display:none;">
       <h1 class="title">WE Health</h1>
       <p class="subtitle">Track body and mood changes, then learn from women with similar patterns.</p>
 
@@ -468,6 +579,6 @@
     </section>
   </div>
 
-  <script src="script.js?v=20260324-comment-fix-2"></script>
+  <script src="script.js?v=20260325-landing"></script>
 </body>
 </html>

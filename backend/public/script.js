@@ -8,8 +8,55 @@ const isLocalDebugMode =
 window.addEventListener("DOMContentLoaded", () => {
   if (localStorage.getItem("token")) {
     showDashboard();
+  } else {
+    showLanding();
   }
 });
+
+function showLanding() {
+  const landing = document.getElementById("landingSection");
+  const auth = document.getElementById("authSection");
+  const app = document.getElementById("appSection");
+  if (landing) {
+    landing.style.display = "block";
+  }
+  if (auth) {
+    auth.style.display = "none";
+  }
+  if (app) {
+    app.style.display = "none";
+  }
+}
+
+function setAuthTab(tabName) {
+  document.querySelectorAll(".tab-content").forEach((tab) => tab.classList.remove("active"));
+  document.querySelectorAll(".tabs .tab-btn").forEach((btn) => btn.classList.remove("active"));
+  const targetTab = document.getElementById(tabName);
+  const targetBtn = document.querySelector(`.tabs .tab-btn[data-tab=\"${tabName}\"]`);
+  if (targetTab) {
+    targetTab.classList.add("active");
+  }
+  if (targetBtn) {
+    targetBtn.classList.add("active");
+  }
+}
+
+function openAuth(tabName = "login") {
+  const landing = document.getElementById("landingSection");
+  const auth = document.getElementById("authSection");
+  const app = document.getElementById("appSection");
+  if (landing) {
+    landing.style.display = "none";
+  }
+  if (auth) {
+    auth.style.display = "block";
+  }
+  if (app) {
+    app.style.display = "none";
+  }
+  setAuthTab(tabName);
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
 
 function authHeader() {
   return {
@@ -25,10 +72,10 @@ function showMessage(elementId, message, isSuccess = true) {
 }
 
 function switchAuthTab(event, tabName) {
-  document.querySelectorAll(".tab-content").forEach((tab) => tab.classList.remove("active"));
-  document.querySelectorAll(".tabs .tab-btn").forEach((btn) => btn.classList.remove("active"));
-  document.getElementById(tabName).classList.add("active");
-  event.currentTarget.classList.add("active");
+  setAuthTab(tabName);
+  if (event && event.currentTarget) {
+    event.currentTarget.classList.add("active");
+  }
 }
 
 function switchAppTab(event, tabName) {
@@ -232,6 +279,10 @@ function showDashboard() {
     return;
   }
 
+  const landing = document.getElementById("landingSection");
+  if (landing) {
+    landing.style.display = "none";
+  }
   document.getElementById("authSection").style.display = "none";
   document.getElementById("appSection").style.display = "block";
   document
@@ -260,8 +311,7 @@ function showDashboard() {
 function logout() {
   localStorage.removeItem("token");
   localStorage.removeItem("user");
-  document.getElementById("authSection").style.display = "block";
-  document.getElementById("appSection").style.display = "none";
+  showLanding();
   document
     .querySelectorAll("#authSection input, #authSection button, #authSection textarea, #authSection select")
     .forEach((element) => {
