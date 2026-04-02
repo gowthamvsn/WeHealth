@@ -4,7 +4,18 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node server.js",
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "ingest:stage1": "node scripts/stage1_ingest_reddit.js",
+    "ingest:stage1:reset": "node scripts/stage1_ingest_reddit.js --truncate",
+    "extract:stage2": "node scripts/stage2_extract_reddit.js",
+    "extract:stage2:pilot": "node scripts/stage2_extract_reddit.js --pilot",
+    "extract:stage2:reset": "node scripts/stage2_extract_reddit.js --reset",
+    "canonicalize:stage3": "node scripts/stage3_canonicalize.js",
+    "canonicalize:stage3:pilot": "node scripts/stage3_canonicalize.js --pilot 500",
+    "canonicalize:stage3:reset": "node scripts/stage3_canonicalize.js --reset",
+    "menotype:stage4": "node scripts/stage4_llm_categorize_menotypes.js",
+    "menotype:stage4:reset": "node scripts/stage4_llm_categorize_menotypes.js --reset"
   },
   "keywords": [],
   "author": "",
@@ -12,6 +23,7 @@
   "dependencies": {
     "bcryptjs": "^3.0.3",
     "cors": "^2.8.6",
+    "csv-parse": "^6.2.1",
     "dotenv": "^17.3.1",
     "express": "^5.2.1",
     "jsonwebtoken": "^9.0.3",

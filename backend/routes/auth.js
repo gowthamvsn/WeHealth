@@ -38,9 +38,9 @@ router.post('/register', async (req, res) => {
     // Generate OTP for registration verification (shown in UI while email is not configured).
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
 
-    await pool.query('DELETE FROM otp_codes WHERE email = $1', [email]);
+    await pool.query("DELETE FROM otp_codes WHERE email = $1 AND purpose = 'registration'", [email]);
     await pool.query(
-      'INSERT INTO otp_codes (email, otp, expires_at) VALUES ($1, $2, NOW() + INTERVAL \'15 minutes\')',
+      "INSERT INTO otp_codes (email, purpose, otp, expires_at) VALUES ($1, 'registration', $2, NOW() + INTERVAL '15 minutes')",
       [email, otp]
     );
 
@@ -115,8 +115,8 @@ router.post('/request-otp', async (req, res) => {
 
     // Store OTP in database (upsert if exists)
     await pool.query(
-      `INSERT INTO otp_codes (email, otp, expires_at) VALUES ($1, $2, $3)
-       ON CONFLICT (email) DO UPDATE SET otp = $2, expires_at = $3`,
+      `INSERT INTO otp_codes (email, purpose, otp, expires_at) VALUES ($1, 'login', $2, $3)
+       ON CONFLICT (email, purpose) DO UPDATE SET otp = $2, expires_at = $3, used_at = NULL`,
       [email, otp, expiresAt]
     );
 
@@ -145,7 +145,7 @@ router.post('/verify-otp', async (req, res) => {
   try {
     // Check OTP
     const result = await pool.query(
-      'SELECT * FROM otp_codes WHERE email = $1 AND otp = $2 AND expires_at > NOW()',
+      "SELECT * FROM otp_codes WHERE email = $1 AND purpose = 'login' AND otp = $2 AND expires_at > NOW() AND used_at IS NULL",
       [email, otp]
     );
 
@@ -170,7 +170,7 @@ router.post('/verify-otp', async (req, res) => {
     }
 
     // Delete used OTP
-    await pool.query('DELETE FROM otp_codes WHERE email = $1', [email]);
+    await pool.query("UPDATE otp_codes SET used_at = NOW() WHERE email = $1 AND purpose = 'login'", [email]);
 
     // Generate JWT
     const token = jwt.sign(
@@ -196,7 +196,7 @@ router.post('/verify-registration-otp', async (req, res) => {
 
   try {
     const result = await pool.query(
-      'SELECT 1 FROM otp_codes WHERE email = $1 AND otp = $2 AND expires_at > NOW()',
+      "SELECT 1 FROM otp_codes WHERE email = $1 AND purpose = 'registration' AND otp = $2 AND expires_at > NOW() AND used_at IS NULL",
       [email, otp]
     );
 
@@ -204,7 +204,9 @@ router.post('/verify-registration-otp', async (req, res) => {
       return res.status(400).json({ error: 'Invalid or expired OTP' });
     }
 
-    await pool.query('DELETE FROM otp_codes WHERE email = $1', [email]);
+    await pool.query("UPDATE otp_codes SET used_at = NOW() WHERE email = $1 AND purpose = 'registration'", [email]);
+
+    await pool.query('UPDATE users SET email_verified = TRUE, updated_at = NOW() WHERE email = $1', [email]);
 
     res.json({ message: 'Email verified successfully. You can now login.' });
   } catch (error) {
@@ -232,10 +234,11 @@ router.post('/forgot-password', async (req, res) => {
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
     const expiresAt = new Date(Date.now() + 15 * 60 * 1000); // 15 minutes
 
-    // Store OTP in users table
+    // Store password reset OTP in otp_codes (single OTP table for all auth flows)
     await pool.query(
-      'UPDATE users SET reset_token = $1, reset_token_expires_at = $2 WHERE email = $3',
-      [otp, expiresAt, email]
+      `INSERT INTO otp_codes (email, purpose, otp, expires_at) VALUES ($1, 'password_reset', $2, $3)
+       ON CONFLICT (email, purpose) DO UPDATE SET otp = $2, expires_at = $3, used_at = NULL`,
+      [email, otp, expiresAt]
     );
 
     // Try to send email (optional - for testing, just return OTP)
@@ -269,9 +272,17 @@ router.post('/reset-password', async (req, res) => {
   }
 
   try {
-    // Check if user exists and verify OTP
+    // Check if user exists and verify password reset OTP
     const userResult = await pool.query(
-      'SELECT * FROM users WHERE email = $1 AND reset_token = $2 AND reset_token_expires_at > NOW()',
+      `SELECT u.*
+       FROM users u
+       JOIN otp_codes o
+         ON o.email = u.email
+        AND o.purpose = 'password_reset'
+        AND o.otp = $2
+        AND o.expires_at > NOW()
+        AND o.used_at IS NULL
+       WHERE u.email = $1`,
       [email, otp]
     );
 
@@ -282,10 +293,15 @@ router.post('/reset-password', async (req, res) => {
     // Hash new password
     const hashedPassword = await bcrypt.hash(newPassword, 10);
 
-    // Update password and clear reset tokens
+    // Update password and mark OTP as used
     await pool.query(
-      'UPDATE users SET password = $1, reset_token = NULL, reset_token_expires_at = NULL, updated_at = NOW() WHERE email = $2',
+      'UPDATE users SET password = $1, updated_at = NOW() WHERE email = $2',
       [hashedPassword, email]
+    );
+
+    await pool.query(
+      "UPDATE otp_codes SET used_at = NOW() WHERE email = $1 AND purpose = 'password_reset'",
+      [email]
     );
 
     res.json({ message: 'Password reset successfully' });

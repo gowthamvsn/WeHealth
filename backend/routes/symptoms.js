@@ -1,14 +1,85 @@
 const express = require("express");
 const router = express.Router();
 const pool = require("../db");
+const { categorizeMenotype, MENOTYPES } = require("../utils/menotype_categorizer");
+
+const ACTIVE_MODEL = "we-gpt-4.1";
+
+function normalizeToken(value) {
+  return String(value || "")
+    .toLowerCase()
+    .trim()
+    .replace(/[\s-]+/g, "_")
+    .replace(/[^a-z0-9_]/g, "")
+    .replace(/_+/g, "_")
+    .replace(/^_|_$/g, "");
+}
+
+async function normalizeSymptomsInput(symptoms) {
+  const input = Array.isArray(symptoms) ? symptoms : [];
+  const out = [];
+
+  for (const symptom of input) {
+    const token = normalizeToken(symptom);
+    if (!token) continue;
+
+    const exact = await pool.query(
+      `SELECT canonical_name
+         FROM symptom_vocab
+        WHERE canonical_name = $1
+          AND canonical_name <> 'other_symptom'
+        LIMIT 1`,
+      [token],
+    );
+    if (exact.rows.length > 0) {
+      const c = exact.rows[0].canonical_name;
+      if (!out.includes(c)) out.push(c);
+      continue;
+    }
+
+    const alias = await pool.query(
+      `SELECT canonical_name
+         FROM symptom_aliases
+        WHERE alias = $1
+          AND canonical_name <> 'other_symptom'
+        LIMIT 1`,
+      [token],
+    );
+    if (alias.rows.length > 0) {
+      const c = alias.rows[0].canonical_name;
+      if (!out.includes(c)) out.push(c);
+      continue;
+    }
+
+    const fuzzy = `%${token}%`;
+    const aliasFuzzy = await pool.query(
+      `SELECT canonical_name
+         FROM symptom_aliases
+        WHERE alias LIKE $1 OR $2 LIKE ('%' || alias || '%')
+          AND canonical_name <> 'other_symptom'
+        ORDER BY LENGTH(alias) ASC
+        LIMIT 1`,
+      [fuzzy, token],
+    );
+    if (aliasFuzzy.rows.length > 0) {
+      const c = aliasFuzzy.rows[0].canonical_name;
+      if (!out.includes(c)) out.push(c);
+    }
+  }
+
+  return out;
+}
 
 router.get("/", async (req, res) => {
   try {
     const result = await pool.query(
-      "SELECT canonical_symptom FROM symptom_dictionary ORDER BY canonical_symptom"
+      `SELECT canonical_name
+         FROM symptom_vocab
+        WHERE canonical_name <> 'other_symptom'
+        ORDER BY canonical_name`,
     );
 
-    res.json(result.rows);
+    res.json(result.rows.map((r) => ({ canonical_symptom: r.canonical_name })));
   } catch (err) {
     console.error(err);
     res.status(500).send("Server error");
@@ -23,126 +94,128 @@ router.post("/women-like-me", async (req, res) => {
       return res.status(400).json({ error: "Symptoms array is required" });
     }
 
-    // Normalize input symptoms using exact + LIKE matching.
-    const inputCanonicalSymptoms = [];
-    const inputCanonicalSymptomsLower = [];
-    for (const symptom of symptoms) {
-      const rawLower = String(symptom).toLowerCase().trim();
-      const fuzzyToken = `%${rawLower}%`;
-      
-      let mappingResult = await pool.query(
-        `SELECT canonical_symptom
-         FROM symptom_mapping
-         WHERE LOWER(raw_symptom) = $1
-            OR LOWER(raw_symptom) LIKE $2
-            OR $1 LIKE ('%' || LOWER(raw_symptom) || '%')
-         ORDER BY
-           CASE
-             WHEN LOWER(raw_symptom) = $1 THEN 0
-             WHEN LOWER(raw_symptom) LIKE $2 THEN 1
-             ELSE 2
-           END,
-           LENGTH(raw_symptom) ASC
-         LIMIT 1`,
-        [rawLower, fuzzyToken]
-      );
-      
-      if (mappingResult.rows.length > 0) {
-        const canonical = mappingResult.rows[0].canonical_symptom;
-        if (!inputCanonicalSymptoms.includes(canonical)) {
-          inputCanonicalSymptoms.push(canonical);
-          inputCanonicalSymptomsLower.push(canonical.toLowerCase());
-        }
-      } else {
-        if (/\b(gut|stomach|abdomen|acid|acidity|bloat|bloating|indigestion|digestive)\b/i.test(rawLower)) {
-          if (!inputCanonicalSymptomsLower.includes("digestive issues")) {
-            inputCanonicalSymptoms.push("digestive issues");
-            inputCanonicalSymptomsLower.push("digestive issues");
-          }
-          continue;
-        }
-
-        // Fallback to LIKE match on symptom_dictionary
-        let dictResult = await pool.query(
-          `SELECT canonical_symptom
-           FROM symptom_dictionary
-           WHERE LOWER(canonical_symptom) LIKE $1
-              OR $2 LIKE ('%' || LOWER(canonical_symptom) || '%')
-            ORDER BY LENGTH(canonical_symptom) ASC, symptom_id ASC
-           LIMIT 1`,
-          [fuzzyToken, rawLower]
-        );
-        
-        if (dictResult.rows.length > 0) {
-          const canonical = dictResult.rows[0].canonical_symptom;
-          if (!inputCanonicalSymptoms.includes(canonical)) {
-            inputCanonicalSymptoms.push(canonical);
-            inputCanonicalSymptomsLower.push(canonical.toLowerCase());
-          }
-        } else {
-          return res.status(400).json({
-            error: `No matching symptom found for: ${symptom}`
-          });
-        }
-      }
+    const canonicalSymptoms = await normalizeSymptomsInput(symptoms);
+    if (canonicalSymptoms.length === 0) {
+      return res.status(400).json({ error: "No recognizable symptoms found" });
     }
 
-    // Find users with ALL input symptoms from normalized check-ins.
-    const cohortQuery = await pool.query(
-      `WITH user_symptoms AS (
-         SELECT uc.user_id,
-                ARRAY_AGG(DISTINCT LOWER(symptom)) AS symptom_list
-         FROM user_checkins uc
-         CROSS JOIN LATERAL unnest(uc.symptoms) AS symptom
-         GROUP BY uc.user_id
+    const menotype = await categorizeMenotype(canonicalSymptoms);
+
+    const cohortSizeRes = await pool.query(
+      `SELECT COUNT(*)::int AS n
+         FROM menotype_ml_profiles
+        WHERE model_name = $1
+          AND primary_menotype = $2`,
+      [ACTIVE_MODEL, menotype.menotype_id],
+    );
+    const similarUsers = cohortSizeRes.rows[0]?.n || 0;
+
+    const topSymptomsRes = await pool.query(
+      `SELECT cs.canonical_name AS canonical_symptom,
+              COUNT(*)::int AS count
+         FROM menotype_ml_profiles m
+         JOIN canonical_symptoms cs ON cs.extraction_id::text = m.extraction_id
+        WHERE m.model_name = $1
+          AND m.primary_menotype = $2
+          AND cs.canonical_name <> 'other_symptom'
+        GROUP BY cs.canonical_name
+        ORDER BY count DESC
+        LIMIT 10`,
+      [ACTIVE_MODEL, menotype.menotype_id],
+    );
+
+    const topTreatmentsRes = await pool.query(
+      `SELECT ct.canonical_name AS canonical_treatment,
+              COUNT(*)::int AS count
+         FROM menotype_ml_profiles m
+         JOIN canonical_treatments ct ON ct.extraction_id::text = m.extraction_id
+        WHERE m.model_name = $1
+          AND m.primary_menotype = $2
+          AND ct.canonical_name <> 'other_treatment'
+        GROUP BY ct.canonical_name
+        ORDER BY count DESC
+        LIMIT 10`,
+      [ACTIVE_MODEL, menotype.menotype_id],
+    );
+
+    const workedRes = await pool.query(
+      `WITH s AS (
+         SELECT ct.canonical_name,
+                COUNT(*) FILTER (WHERE ct.reported_effect='positive')::int AS pos_n,
+                COUNT(*) FILTER (WHERE ct.reported_effect='negative')::int AS neg_n,
+                COUNT(*) FILTER (WHERE ct.reported_effect IS NOT NULL)::int AS known_n
+           FROM menotype_ml_profiles m
+           JOIN canonical_treatments ct ON ct.extraction_id::text = m.extraction_id
+          WHERE m.model_name = $1
+            AND m.primary_menotype = $2
+            AND ct.canonical_name <> 'other_treatment'
+          GROUP BY ct.canonical_name
        )
-       SELECT user_id
-       FROM user_symptoms
-       WHERE symptom_list @> $1::TEXT[]`,
-      [inputCanonicalSymptomsLower]
+       SELECT canonical_name AS treatment,
+              pos_n, neg_n, known_n,
+              ROUND((pos_n - neg_n)::numeric / NULLIF(known_n, 0), 3) AS net_score
+         FROM s
+        WHERE known_n >= 8
+        ORDER BY net_score DESC, known_n DESC
+        LIMIT 8`,
+      [ACTIVE_MODEL, menotype.menotype_id],
     );
 
-    const similarUserIds = cohortQuery.rows.map(row => row.user_id);
-    const similarUsers = similarUserIds.length;
-
-    if (similarUsers === 0) {
-      return res.json({
-        input_symptoms: inputCanonicalSymptoms,
-        similar_users: 0,
-        top_symptoms: [],
-        top_treatments: [],
-        success_rates: []
-      });
-    }
-
-    // Find co-occurring symptoms in the cohort (excluding input symptoms)
-    const topSymptomsQuery = await pool.query(
-      `SELECT symptom AS canonical_symptom, COUNT(*)::int AS count
-       FROM (
-         SELECT DISTINCT uc.user_id, LOWER(s) AS symptom
-         FROM user_checkins uc
-         CROSS JOIN LATERAL unnest(uc.symptoms) AS s
-         WHERE uc.user_id = ANY($1)
-       ) sq
-       WHERE symptom <> ALL($2::TEXT[])
-       GROUP BY symptom
-       ORDER BY count DESC
-       LIMIT 10`,
-      [similarUserIds, inputCanonicalSymptomsLower]
+    const didntWorkRes = await pool.query(
+      `WITH s AS (
+         SELECT ct.canonical_name,
+                COUNT(*) FILTER (WHERE ct.reported_effect='positive')::int AS pos_n,
+                COUNT(*) FILTER (WHERE ct.reported_effect='negative')::int AS neg_n,
+                COUNT(*) FILTER (WHERE ct.reported_effect IS NOT NULL)::int AS known_n
+           FROM menotype_ml_profiles m
+           JOIN canonical_treatments ct ON ct.extraction_id::text = m.extraction_id
+          WHERE m.model_name = $1
+            AND m.primary_menotype = $2
+            AND ct.canonical_name <> 'other_treatment'
+          GROUP BY ct.canonical_name
+       )
+       SELECT canonical_name AS treatment,
+              pos_n, neg_n, known_n,
+              ROUND((pos_n - neg_n)::numeric / NULLIF(known_n, 0), 3) AS net_score
+         FROM s
+        WHERE known_n >= 8
+        ORDER BY net_score ASC, known_n DESC
+        LIMIT 8`,
+      [ACTIVE_MODEL, menotype.menotype_id],
     );
 
-    // V1 does not store treatment events per user check-in yet.
-    const topTreatmentsQuery = { rows: [] };
-    const successRatesQuery = { rows: [] };
+    const recentCommunityRes = await pool.query(
+      `SELECT p.post_id, p.content, p.created_at, u.username,
+              COALESCE(l.likes_count, 0)::int AS likes_count,
+              COALESCE(c.comments_count, 0)::int AS comments_count
+         FROM community_posts p
+         JOIN users u ON u.user_id = p.user_id
+         LEFT JOIN (
+           SELECT post_id, COUNT(*) AS likes_count FROM post_likes GROUP BY post_id
+         ) l ON l.post_id = p.post_id
+         LEFT JOIN (
+           SELECT post_id, COUNT(*) AS comments_count FROM post_comments GROUP BY post_id
+         ) c ON c.post_id = p.post_id
+        ORDER BY p.created_at DESC
+        LIMIT 5`,
+    );
 
     res.json({
-      input_symptoms: inputCanonicalSymptoms,
+      input_symptoms: canonicalSymptoms,
+      menotype: {
+        id: menotype.menotype_id,
+        name: menotype.menotype_name,
+        confidence: menotype.confidence,
+        reasoning: menotype.reasoning,
+        definition: MENOTYPES[menotype.menotype_id]?.description || null,
+      },
       similar_users: similarUsers,
-      top_symptoms: topSymptomsQuery.rows,
-      top_treatments: topTreatmentsQuery.rows,
-      success_rates: successRatesQuery.rows
+      top_symptoms: topSymptomsRes.rows,
+      top_treatments: topTreatmentsRes.rows,
+      worked_best: workedRes.rows,
+      didnt_work_best: didntWorkRes.rows,
+      recent_community_posts: recentCommunityRes.rows,
     });
-
   } catch (err) {
     console.error("Women-like-me error:", err);
     res.status(500).json({ error: "Server error" });

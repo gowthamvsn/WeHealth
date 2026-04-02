@@ -1,323 +1,299 @@
 # WE Health
 
-WE Health is a women-focused health tracking and peer-support platform that combines personal daily check-ins with community interaction and cohort-style insights.
+WE Health is a women-focused health tracking, community, and analytics platform. It has two distinct layers:
 
-## Project Goal
+1. A user-facing app for registration, login, check-ins, community posts, comments, likes, and cohort-style "Women Like Me" insights.
+2. A Reddit analytics pipeline that ingests discussion data, extracts structured menopause facts, canonicalizes symptoms and treatments, and assigns fixed menotype categories.
 
-Build a safe and practical digital space where women can:
+This README is the project manual for the current repository state. It explains the full flow and the significance of every file currently present in the repo.
 
-- Track daily physical and emotional changes.
-- Identify patterns in mood, energy, sleep, and symptoms.
-- Learn from women with similar symptom profiles ("Women Like Me").
-- Share experiences and support each other through a moderated community feed.
+## Product Flow
 
-## Core Features
+### App flow
 
-- Authentication and account flows
-	- Register with email, username, and password
-	- Login with email or username
-	- OTP-based email verification for registration
-	- Forgot password and reset password with OTP
-- Daily health tracking
-	- Symptoms (comma-separated, normalized on backend)
-	- Mood score, energy level, sleep hours
-	- Body changes, emotions, and notes
-- Insights
-	- Women-like-me symptom cohort analysis
-	- Co-occurring symptom suggestions from similar users
-- Community
-	- Create posts with optional image URL
-	- Like/unlike posts
-	- Add and read comments
+1. A user registers with email, username, and password.
+2. The backend creates the user and issues a registration OTP.
+3. The user verifies the OTP and can then log in.
+4. After login, the frontend stores a JWT and uses it for protected API calls.
+5. The user can submit daily check-ins with symptoms, mood, energy, sleep, body changes, emotions, and notes.
+6. The backend normalizes user symptoms and returns cohort-style insights using menotype and canonical symptom/treatment data.
+7. The user can create community posts, comment on posts, and like or unlike posts.
+
+### Analytics pipeline flow
+
+1. Stage 1 ingests Reddit posts and comments into raw tables.
+2. Stage 2 uses Azure OpenAI to extract structured JSON from posts and comments.
+3. Stage 3 canonicalizes raw symptom and treatment mentions into controlled vocabularies.
+4. Stage 3 optional remap uses an LLM to reduce `other_symptom` and `other_treatment` noise.
+5. Stage 4 assigns each extraction to one of 5 predefined menotypes.
+6. The app uses those outputs to power the "Women Like Me" experience.
+
+## Menotype Method
+
+The currently active menotype path is LLM classification, not random assignment.
+
+- [backend/scripts/stage4_llm_categorize_menotypes.js](backend/scripts/stage4_llm_categorize_menotypes.js): assigns one of 5 fixed menotypes to each extraction using Azure OpenAI.
+- [backend/utils/menotype_categorizer.js](backend/utils/menotype_categorizer.js): classifies live user symptom input into the same 5 categories, with heuristic fallback if the LLM fails.
+- [backend/scripts/stage4_build_menotype_ml.js](backend/scripts/stage4_build_menotype_ml.js): alternate ML clustering path using k-means style clustering over symptom vectors. This exists as an alternate analysis path, but the user-facing v3 flow is based on LLM categorization into predefined classes.
 
 ## Tech Stack
 
-- Frontend: HTML, CSS, Vanilla JavaScript
+- Frontend: HTML, CSS, vanilla JavaScript
 - Backend: Node.js, Express
 - Database: PostgreSQL
-- Auth: JWT
-- Email/OTP: Nodemailer (Gmail or compatible SMTP)
+- Auth: JWT + OTP
+- Email: Nodemailer
+- AI: Azure OpenAI
+- Data pipeline: custom Node scripts over PostgreSQL tables
 
-## Repository Structure
+## Local Setup
 
-The project currently contains the following important files and directories:
-
-```text
-WeHealth/
-|-- README.md
-|-- .gitignore
-|-- .postman/
-|   `-- resources.yaml
-|-- backend/
-|   |-- .env
-|   |-- db.js
-|   |-- package.json
-|   |-- server.js
-|   |-- middleware/
-|   |   `-- auth.js
-|   |-- public/
-|   |   |-- index.html
-|   |   `-- script.js
-|   |-- routes/
-|   |   |-- auth.js
-|   |   |-- checkins.js
-|   |   |-- community.js
-|   |   |-- menotype.js
-|   |   `-- symptoms.js
-|   `-- utils/
-|       `-- sendEmail.js
-|-- database/
-|   |-- create_frontend_v1_tables.sql
-|   `-- create_password_reset_table.sql
-`-- postman/
-		|-- collections/
-		|-- environments/
-		|-- flows/
-		|-- globals/
-		|   `-- workspace.globals.yaml
-		`-- specs/
-```
-
-## Prerequisites
+### Prerequisites
 
 - Node.js 18+
 - npm 9+
 - PostgreSQL 13+
 
-## Environment Configuration
+### Environment
 
-Create or update backend/.env with:
+Create or update `backend/.env` with values like these:
 
 ```env
 DB_HOST=localhost
 DB_PORT=5432
 DB_USER=your_postgres_user
 DB_PASSWORD=your_postgres_password
-DB_NAME=wehealth
+DB_NAME=wehealth_v3
 DB_SSL=false
 
 JWT_SECRET=replace_with_a_long_random_secret
 NODE_ENV=development
 
-# Optional for real email sending
 EMAIL_USER=your_email@gmail.com
 EMAIL_PASS=your_email_app_password
+
+AZURE_OPENAI_ENDPOINT=https://your-resource.openai.azure.com
+AZURE_OPENAI_KEY=your-key
+AZURE_OPENAI_DEPLOYMENT=we-gpt-4.1
+AZURE_OPENAI_API_VERSION=2024-10-21
 ```
 
 Notes:
 
-- If EMAIL_USER and EMAIL_PASS are not set, OTP is still usable in development flows where returned by API.
-- For Azure PostgreSQL, DB_SSL is often true.
+- If email credentials are missing, OTP flows still work in development because OTP values are returned or logged for testing.
+- Azure PostgreSQL usually requires `DB_SSL=true`.
 
-## Database Setup
+### Database bootstrap
 
-Run the provided SQL scripts:
+Run the app-core schema first:
 
 ```bash
-psql -d wehealth -f ./database/create_frontend_v1_tables.sql
-psql -d wehealth -f ./database/create_password_reset_table.sql
+psql -d wehealth_v3 -f ./database/create_wehealth_v3_app_core.sql
 ```
 
-Important:
+Then run the pipeline schemas when you want the Reddit analytics pipeline:
 
-- The code also expects users, otp_codes, symptom_dictionary, and symptom_mapping tables.
-- Ensure these base tables exist before running the app (from your main schema/migrations).
+```bash
+psql -d wehealth_v3 -f ./database/create_wehealth_v3_stage1_ingestion.sql
+psql -d wehealth_v3 -f ./database/create_wehealth_v3_stage2_extraction.sql
+psql -d wehealth_v3 -f ./database/create_wehealth_v3_stage3_canonicalization.sql
+psql -d wehealth_v3 -f ./database/create_wehealth_v3_stage4_linking.sql
+```
 
-## Database Schema (Live DB Audit)
+### Run the app
 
-This section documents the current `public` schema in the connected database (`wehealth_v2`) and includes all detected tables, columns, relationships, and why each table exists.
+```bash
+npm --prefix backend install
+npm --prefix backend start
+```
 
-### Enforced Foreign-Key Relationships
+The local app is served at `http://localhost:3000`.
 
-- `community_posts.user_id -> users.user_id` (ON DELETE CASCADE)
-- `entry_symptoms_normalized.entry_id -> entries.entry_id` (ON DELETE NO ACTION)
-- `entry_symptoms_normalized.symptom_id -> symptom_dictionary.symptom_id` (ON DELETE NO ACTION)
-- `post_comments.post_id -> community_posts.post_id` (ON DELETE CASCADE)
-- `post_comments.user_id -> users.user_id` (ON DELETE CASCADE)
-- `post_likes.post_id -> community_posts.post_id` (ON DELETE CASCADE)
-- `post_likes.user_id -> users.user_id` (ON DELETE CASCADE)
-- `user_checkins.user_id -> users.user_id` (ON DELETE CASCADE)
+## Core Runtime Architecture
 
-### Table Catalog (All Public Tables)
+### HTTP server
 
-1. `comment_events_normalized`
-   Columns: `id`, `event_id`, `comment_id`, `entry_id`, `treatment_id`, `symptom_id`, `outcome`, `evidence_type`.
-   Significance: Structured treatment/symptom outcome events extracted from comments for analytics.
+- [backend/server.js](backend/server.js): Express entry point. Serves static frontend files, mounts auth and protected routes, and logs the active database.
 
-2. `comment_treatment_events`
-   Columns: `event_id`, `comment_id`, `entry_id`, `treatment`, `symptom`, `outcome`, `evidence_type`.
-   Significance: Parsed treatment-event staging table before dictionary normalization.
+### Database connection
 
-3. `comments`
-   Columns: `comment_id`, `entry_id`, `comment_text`, `comment_clean`.
-   Significance: Raw/clean comment text attached to imported entries.
+- [backend/db.js](backend/db.js): shared PostgreSQL connection pool. Reads `.env`, auto-enables SSL for Azure PostgreSQL if needed.
 
-4. `community_posts`
-   Columns: `post_id`, `user_id`, `content`, `image_url`, `created_at`, `updated_at`.
-   Significance: Main social feed posts created by authenticated users.
+### Auth middleware
 
-5. `entries`
-   Columns: `entry_id`, `post_id`, `emotional_state`, `timeframe`, `primary_issue`, `age`, `age_range`, `age_at_menopause`, `years_since_menopause`, `menopause_stage`, `stage_confidence`.
-   Significance: Canonicalized narrative-entry records used for symptom/treatment mining.
+- [backend/middleware/auth.js](backend/middleware/auth.js): verifies JWT bearer tokens and attaches decoded user info to requests.
 
-6. `entries_clean`
-   Columns: `entry_id`, `post_id`, `emotional_state`, `timeframe`, `primary_issue`, `age`, `age_range`, `age_at_menopause`, `years_since_menopause`, `menopause_stage`, `stage_confidence`.
-   Significance: Cleaned/processed mirror of entries for quality-controlled analysis.
+### Utility modules
 
-7. `entry_symptoms`
-   Columns: `entry_id`, `symptom`.
-   Significance: Non-normalized symptom mentions extracted from entries.
+- [backend/utils/sendEmail.js](backend/utils/sendEmail.js): small Nodemailer wrapper used by OTP and password reset flows.
+- [backend/utils/menotype_categorizer.js](backend/utils/menotype_categorizer.js): live user menotype classifier for the app. Uses Azure OpenAI first and falls back to heuristic scoring.
 
-8. `entry_symptoms_normalized`
-   Columns: `entry_id`, `symptom_id`.
-   Significance: Bridge table linking entries to canonical symptoms in symptom dictionary.
+## API Surface
 
-9. `menotypes`
-   Columns: `entry_id`, `menotype`.
-   Significance: Menotype classification labels per entry.
+### Auth routes
 
-10. `otp_codes`
-	Columns: `email`, `otp`, `expires_at`.
-	Significance: Time-bound OTP storage for registration and login/recovery flows.
+- [backend/routes/auth.js](backend/routes/auth.js): registration, login, OTP verification, forgot password, and reset password. Uses the v3 `otp_codes` table with `purpose` values such as `registration`, `login`, and `password_reset`.
 
-11. `post_comments`
-	Columns: `comment_id`, `post_id`, `user_id`, `content`, `created_at`.
-	Significance: Community comments authored by users under social posts.
+### Check-in routes
 
-12. `post_likes`
-	Columns: `post_id`, `user_id`, `created_at`.
-	Significance: Many-to-many like interaction table between users and community posts.
+- [backend/routes/checkins.js](backend/routes/checkins.js): create and fetch user daily check-ins. Also normalizes raw user symptoms through legacy symptom mapping tables when available.
 
-13. `raw_entries`
-	Columns: `entry_id`, `subreddit`, `post_id`, `title`, `post_text`, `score`, `created_utc`, `url`, `num_comments`, `comments`.
-	Significance: Raw imported source data used to build curated menopause datasets.
+### Community routes
 
-14. `raw_posts`
-	Columns: `post_id`, `subreddit`, `title`, `post_text`, `comments`.
-	Significance: Original post-level ingestion table before detailed parsing.
+- [backend/routes/community.js](backend/routes/community.js): list posts, create posts, toggle likes, fetch comments, and create comments.
 
-15. `symptom_dictionary`
-	Columns: `symptom_id`, `canonical_symptom`.
-	Significance: Master list of canonical symptom terms used for normalization.
+### Menotype routes
 
-16. `symptom_mapping`
-	Columns: `raw_symptom`, `canonical_symptom`.
-	Significance: Maps free-text symptom variants to canonical symptom names.
+- [backend/routes/menotype.js](backend/routes/menotype.js): legacy route that queries old clustered symptom tables. It is still present but is not the main v3 insight path.
 
-17. `symptom_matrix`
-	Columns: `entry_id`, `hot_flashes`, `sleep`, `anxiety`, `depression`, `brain_fog`, `mood_swings`, `fatigue`, `pain`, `headaches`, `palpitations`, `vaginal_dryness`, `libido`, `irregular_periods`, `weight_changes`, `hair_skin`, `digestive`, `urinary`, `breast_pain`, `dizziness`, `tingling`, `suicidal`, `memory_loss`, `temperature`.
-	Significance: Wide feature table encoding symptom presence/intensity by entry.
+### Symptom and insight routes
 
-18. `symptom_matrix_clean`
-	Columns: `entry_id`, `hot_flashes`, `sleep`, `anxiety`, `depression`, `brain_fog`, `mood_swings`, `fatigue`, `pain`, `headaches`, `palpitations`, `vaginal_dryness`, `libido`, `irregular_periods`, `weight_changes`, `hair_skin`, `digestive`, `urinary`, `breast_pain`, `dizziness`, `tingling`, `suicidal`, `memory_loss`, `temperature`, `menotype`.
-	Significance: Cleaned feature matrix with class label for analysis/training.
+- [backend/routes/symptoms.js](backend/routes/symptoms.js): powers the "Women Like Me" experience. It normalizes symptoms, categorizes the user into a menotype, pulls similar cohort data, and returns top symptoms, top treatments, helpful treatments, less-helpful treatments, and recent community posts.
 
-19. `symptom_matrix_clustered`
-	Columns: `entry_id`, `hot_flashes`, `sleep`, `anxiety`, `depression`, `brain_fog`, `mood_swings`, `fatigue`, `pain`, `headaches`, `palpitations`, `vaginal_dryness`, `libido`, `irregular_periods`, `weight_changes`, `hair_skin`, `digestive`, `urinary`, `breast_pain`, `dizziness`, `tingling`, `suicidal`, `memory_loss`, `temperature`, `menotype`.
-	Significance: Clustered/model-ready symptom matrix used by menotype route logic.
+## Frontend
 
-20. `symptom_synonyms`
-	Columns: `raw_symptom`, `symptom_id`.
-	Significance: Alternate symptom phrases tied to canonical symptom IDs.
+- [backend/public/index.html](backend/public/index.html): the full single-page UI. Contains the landing page, auth forms, tracker view, and community view styling/layout.
+- [backend/public/script.js](backend/public/script.js): frontend controller. Handles auth, token storage, check-ins, insight loading, community feed rendering, likes, comments, and UI tab switching.
 
-21. `treatment_comments`
-	Columns: `comment_id`, `entry_id`, `comment_clean`.
-	Significance: Treatment-focused cleaned comment corpus for downstream extraction.
+## Package Configuration
 
-22. `treatment_dictionary`
-	Columns: `treatment_id`, `canonical_treatment`.
-	Significance: Master list of normalized treatment names.
+- [backend/package.json](backend/package.json): Node package manifest, runtime dependencies, and stage command aliases.
+- [backend/package-lock.json](backend/package-lock.json): npm dependency lockfile for reproducible installs.
 
-23. `treatment_events`
-	Columns: `event_id`, `entry_id`, `treatment`, `worked`, `discontinued`.
-	Significance: Parsed treatment outcome events from entries/comments.
+## Database Files
 
-24. `treatment_events_normalized`
-	Columns: `entry_id`, `treatment_id`, `worked`, `discontinued`.
-	Significance: Normalized treatment outcomes linked to treatment dictionary IDs.
+- [database/create_frontend_v1_tables.sql](database/create_frontend_v1_tables.sql): older frontend-oriented schema for check-ins, community posts, comments, and likes.
+- [database/create_password_reset_table.sql](database/create_password_reset_table.sql): older migration adding reset-token columns directly onto `users`.
+- [database/create_wehealth_v3_app_core.sql](database/create_wehealth_v3_app_core.sql): current compact v3 app schema for `users`, `otp_codes`, `user_checkins`, `community_posts`, `post_comments`, and `post_likes`.
+- [database/create_wehealth_v3_stage1_ingestion.sql](database/create_wehealth_v3_stage1_ingestion.sql): Stage 1 schema for pipeline runs and raw Reddit post/comment ingestion.
+- [database/create_wehealth_v3_stage2_extraction.sql](database/create_wehealth_v3_stage2_extraction.sql): Stage 2 extraction table for OpenAI-produced structured JSON.
+- [database/create_wehealth_v3_stage3_canonicalization.sql](database/create_wehealth_v3_stage3_canonicalization.sql): Stage 3 vocabularies, aliases, raw mention tables, canonical tables, and remap audit table.
+- [database/create_wehealth_v3_stage4_linking.sql](database/create_wehealth_v3_stage4_linking.sql): Stage 4 materialized view, treatment effectiveness view, menotype profile tables, and menotype-treatment analytics views.
+- [database/wehealth_v3_stage1_validation.md](database/wehealth_v3_stage1_validation.md): acceptance checklist for validating ingestion correctness.
+- [database/wehealth_v3_stage2_validation.md](database/wehealth_v3_stage2_validation.md): acceptance checklist for validating extraction quality and idempotency.
 
-25. `treatment_mapping`
-	Columns: `raw_treatment`, `canonical_treatment`, `treatment_id`.
-	Significance: Mapping from user/raw treatment text to canonical treatment entities.
+## Pipeline Scripts
 
-26. `treatment_side_effects`
-	Columns: `event_id`, `side_effect`.
-	Significance: Side-effect details attached to treatment events.
+### Primary stage runners
 
-27. `treatment_synonyms`
-	Columns: `raw_treatment`, `treatment_id`.
-	Significance: Synonym lookup table to improve treatment normalization.
+- [backend/scripts/stage1_ingest_reddit.js](backend/scripts/stage1_ingest_reddit.js): ingests CSV Reddit datasets into Stage 1 raw tables and records pipeline runs.
+- [backend/scripts/stage2_extract_reddit.js](backend/scripts/stage2_extract_reddit.js): calls Azure OpenAI on raw posts/comments and stores structured extraction JSON.
+- [backend/scripts/stage3_canonicalize.js](backend/scripts/stage3_canonicalize.js): expands extraction JSON into raw and canonical symptom/treatment rows.
+- [backend/scripts/stage3_llm_remap_other.js](backend/scripts/stage3_llm_remap_other.js): uses an LLM to remap `other_*` rows into allowed canonical labels where possible.
+- [backend/scripts/stage4_llm_categorize_menotypes.js](backend/scripts/stage4_llm_categorize_menotypes.js): active Stage 4 path that assigns fixed menotypes with Azure OpenAI.
+- [backend/scripts/stage4_build_menotype_ml.js](backend/scripts/stage4_build_menotype_ml.js): alternate ML clustering path using weighted symptom vectors and k-means style grouping.
 
-28. `user_checkins`
-	Columns: `checkin_id`, `user_id`, `mood_score`, `energy_level`, `sleep_hours`, `symptoms`, `body_changes`, `emotions`, `notes`, `created_at`, `updated_at`.
-	Significance: Core app table for daily check-ins and women-like-me insights.
+### Pipeline automation and orchestration
 
-29. `users`
-	Columns: `user_id`, `email`, `created_at`, `username`, `password`, `updated_at`, `reset_token`, `reset_token_expires_at`.
-	Significance: Account identity table and auth/password-reset source of truth.
+- [backend/scripts/watch_stage2_then_stage3.js](backend/scripts/watch_stage2_then_stage3.js): polls Stage 2 run status and auto-triggers Stage 3, optionally with remap.
+- [backend/scripts/auto_start_stage3_when_stage2_done.js](backend/scripts/auto_start_stage3_when_stage2_done.js): older watcher that auto-starts later stages when Stage 2 finishes.
 
-### Practical Relationship Model (Application View)
+### Phase 2 extraction support
 
-- One `users` record has many `user_checkins`, `community_posts`, `post_comments`, and `post_likes`.
-- One `community_posts` record has many `post_comments` and `post_likes`.
-- One `entries` record has many `entry_symptoms_normalized` rows and can map to one `menotypes` label.
-- `symptom_dictionary` and `treatment_dictionary` are canonical dimensions used by normalization and analytics tables.
+- [backend/scripts/prompts_phase2_extraction.js](backend/scripts/prompts_phase2_extraction.js): alternate prompt definition for explicit symptom-treatment pairing extraction.
+- [backend/scripts/phase2_parser.js](backend/scripts/phase2_parser.js): parser for the Phase 2 explicit-link extraction format.
+- [PHASE_2_EXTRACTION_README.md](PHASE_2_EXTRACTION_README.md): design note describing the explicit pairing extraction approach and intended next steps.
 
-### ERD (Entity Relationship Diagram)
+### Schema and migration helpers
 
-```mermaid
-erDiagram
-	USERS {
-		uuid user_id PK
-		text email
-		varchar username
-		text password
-		text reset_token
-		timestamp reset_token_expires_at
-		timestamp created_at
-		timestamp updated_at
-	}
+- [backend/scripts/reset_v3_stage_tables.js](backend/scripts/reset_v3_stage_tables.js): destructive reset helper for a set of stage tables.
+- [backend/scripts/_migrate_menotype_schema.js](backend/scripts/_migrate_menotype_schema.js): updates menotype profile schema toward extraction-level uniqueness.
+- [backend/scripts/_add_symptom_profile.js](backend/scripts/_add_symptom_profile.js): adds `symptom_profile` JSONB to menotype profiles.
 
-	OTP_CODES {
-		text email
-		text otp
-		timestamp expires_at
-	}
+### Diagnostics, audits, and recovery helpers
 
-	USER_CHECKINS {
-		bigint checkin_id PK
-		uuid user_id FK
-		smallint mood_score
-		smallint energy_level
-		numeric sleep_hours
-		text[] symptoms
-		text body_changes
-		text emotions
-		text notes
-		timestamp created_at
-		timestamp updated_at
-	}
+- [backend/scripts/_audit_menotype_insights.js](backend/scripts/_audit_menotype_insights.js): audits cohort and menotype insight quality.
+- [backend/scripts/_check_canonical_structure.js](backend/scripts/_check_canonical_structure.js): inspects canonical table source separation and shape.
+- [backend/scripts/_check_menotype_distribution.js](backend/scripts/_check_menotype_distribution.js): prints menotype distribution overall and by source type.
+- [backend/scripts/_check_stage1_uniqueness.js](backend/scripts/_check_stage1_uniqueness.js): validates uniqueness assumptions for ingested posts/comments.
+- [backend/scripts/_check_stage2_status.js](backend/scripts/_check_stage2_status.js): inspects recent Stage 2 runs and extraction states.
+- [backend/scripts/_check_stage3_counts.js](backend/scripts/_check_stage3_counts.js): quick row-count summary for Stage 3 output tables.
+- [backend/scripts/_check_v41prod_progress.js](backend/scripts/_check_v41prod_progress.js): checks progress for the `v41prod` extraction run.
+- [backend/scripts/_validate_stage2_pilot.js](backend/scripts/_validate_stage2_pilot.js): evaluates pilot extraction quality and completeness.
+- [backend/scripts/_list_db_tables.js](backend/scripts/_list_db_tables.js): lists current public schema tables.
+- [backend/scripts/_probe_aoai.js](backend/scripts/_probe_aoai.js): probes Azure OpenAI deployment and API-version compatibility.
+- [backend/scripts/check_comment_plus.js](backend/scripts/check_comment_plus.js): investigates `+` comment artifacts in ingested Reddit data.
+- [backend/scripts/check_plus_artifact.js](backend/scripts/check_plus_artifact.js): deeper probe for plus-sign text artifact patterns.
 
-	COMMUNITY_POSTS {
-		bigint post_id PK
-		uuid user_id FK
-		text content
-		text image_url
-		timestamp created_at
-		timestamp updated_at
-	}
+### Cleanup and requeue helpers
 
-	POST_COMMENTS {
-		bigint comment_id PK
-		bigint post_id FK
-		uuid user_id FK
-		text content
-		timestamp created_at
-	}
+- [backend/scripts/_cleanup_v41pilot.js](backend/scripts/_cleanup_v41pilot.js): clears pilot extraction data and closes a stale run.
+- [backend/scripts/_close_stale_runs_20_21.js](backend/scripts/_close_stale_runs_20_21.js): marks specific stale runs as failed.
+- [backend/scripts/_close_stale_stage2_run.js](backend/scripts/_close_stale_stage2_run.js): closes a stale Stage 2 run.
+- [backend/scripts/_close_stale_v41prod_runs.js](backend/scripts/_close_stale_v41prod_runs.js): closes stale `v41prod` Stage 2 run records.
+- [backend/scripts/_stage2_clear_model.js](backend/scripts/_stage2_clear_model.js): deletes extraction rows for a given model.
 
-	POST_LIKES {
-		bigint post_id FK
-		uuid user_id FK
+## Deployment and Generated Artifacts
+
+- [backend/deploy-azure.ps1](backend/deploy-azure.ps1): PowerShell helper to provision and deploy the backend to Azure App Service.
+- `backend/backend.zip`: generated zip artifact from deployment experiments.
+- `backend/deploy.zip`: smaller generated deployment package.
+- `backend/_deploy/`: generated deployment mirror of the backend source used during deployment debugging.
+
+Inside `backend/_deploy/`:
+
+- `db.js`: copied DB connection file for deployment packaging.
+- `package.json`: copied runtime manifest for deployment packaging.
+- `package-lock.json`: copied dependency lockfile for deployment packaging.
+- `server.js`: copied Express entry point for deployment packaging.
+- `middleware/auth.js`: copied JWT middleware.
+- `public/index.html`: copied frontend HTML.
+- `public/script.js`: copied frontend logic.
+- `routes/auth.js`: copied auth routes.
+- `routes/checkins.js`: copied check-in routes.
+- `routes/community.js`: copied community routes.
+- `routes/menotype.js`: copied legacy menotype route.
+- `routes/symptoms.js`: copied insight route.
+- `utils/sendEmail.js`: copied mailer utility.
+- `utils/menotype_categorizer.js`: copied live user menotype categorizer.
+
+These `_deploy` files are not the primary source of truth. The main source lives under `backend/`.
+
+## Postman and Workspace Metadata
+
+- [.postman/resources.yaml](.postman/resources.yaml): local Postman workspace resource metadata.
+- [postman/globals/workspace.globals.yaml](postman/globals/workspace.globals.yaml): Postman global variables for testing flows.
+
+## Root Repository Files
+
+- [README.md](README.md): this project manual.
+- [.gitignore](.gitignore): ignore rules for local secrets, dependencies, and generated artifacts.
+
+## Important Design Notes
+
+### Why there are old and new schemas together
+
+This repository currently contains both legacy v1 or v2-era schema files and the newer v3 pipeline/app files. The important current path is:
+
+- App runtime: `create_wehealth_v3_app_core.sql`
+- Pipeline runtime: `create_wehealth_v3_stage1_ingestion.sql` through `create_wehealth_v3_stage4_linking.sql`
+
+The older files are still useful as historical reference and compatibility scaffolding.
+
+### Why there are two menotype approaches
+
+- LLM categorization was chosen for the active user-facing flow because you wanted 5 fixed menotype definitions, not machine-discovered clusters that may drift.
+- The ML clustering script remains in the repo as a research and comparison path.
+
+### Why `_deploy` exists
+
+It was created during Azure deployment debugging as a copied deployable backend bundle. It is useful for packaging experiments, but it should not replace the primary `backend/` source tree.
+
+## Recommended Developer Workflow
+
+1. Start with the app-core SQL if you only need auth, check-ins, and community.
+2. Run the Stage 1 to Stage 4 SQL files when you need Reddit analytics and menotype insights.
+3. Start the local server with `npm --prefix backend start`.
+4. Use the app at `http://localhost:3000`.
+5. Use the pipeline scripts directly from `backend/scripts/` when refreshing analytics.
+
+## Current Source of Truth Summary
+
+- Main app source: `backend/`
+- Main database source: `database/`
+- Main docs: `README.md`
+- Research or historical notes: `PHASE_2_EXTRACTION_README.md`
+- Generated deployment artifacts: `backend/_deploy/`, `backend/*.zip`
 		timestamp created_at
 	}
 

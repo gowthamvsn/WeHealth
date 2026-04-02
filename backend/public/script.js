@@ -1,4 +1,4 @@
-const API_BASE = "http://localhost:3000";
+const API_BASE = window.location.origin;
 
 // DEBUG JWT MARKER: This block controls the dev-only token preview panel in the UI.
 const isLocalDebugMode =
@@ -431,7 +431,6 @@ async function loadInsights(symptoms) {
   root.innerHTML = '<div class="item">Loading insights...</div>';
 
   try {
-    // Get user's personal stats from checkins
     const checkinsRes = await fetch(`${API_BASE}/checkins?limit=30`, {
       headers: authHeader()
     });
@@ -439,35 +438,16 @@ async function loadInsights(symptoms) {
 
     let personalStats = "";
     if (checkinsRes.ok && checkins.length > 0) {
-      const moods = checkins.map(c => c.mood_score).filter(m => m);
-      const energies = checkins.map(c => c.energy_level).filter(e => e);
-      const emotions = checkins
-        .map(c => c.emotions)
-        .filter(e => e)
-        .flatMap(e => e.split(",").map(s => s.trim().toLowerCase()));
-
-      const avgMood = moods.length ? (moods.reduce((a, b) => a + b) / moods.length).toFixed(1) : "-";
-      const avgEnergy = energies.length ? (energies.reduce((a, b) => a + b) / energies.length).toFixed(1) : "-";
-
-      // Count most common emotions
-      const emotionCounts = {};
-      emotions.forEach(e => {
-        if (e) emotionCounts[e] = (emotionCounts[e] || 0) + 1;
-      });
-      const topEmotions = Object.entries(emotionCounts)
-        .sort((a, b) => b[1] - a[1])
-        .slice(0, 3)
-        .map(([emotion, count]) => `${emotion} (${count}x)`)
-        .join(", ");
-
+      const moods = checkins.map((c) => c.mood_score).filter((m) => m !== null && m !== undefined);
+      const energies = checkins.map((c) => c.energy_level).filter((e) => e !== null && e !== undefined);
+      const avgMood = moods.length ? (moods.reduce((a, b) => a + b, 0) / moods.length).toFixed(1) : "-";
+      const avgEnergy = energies.length ? (energies.reduce((a, b) => a + b, 0) / energies.length).toFixed(1) : "-";
       personalStats = `
         <div class="item"><strong>Your Recent Patterns</strong><br>
-        Avg Mood: ${avgMood}/10 | Avg Energy: ${avgEnergy}/10<br>
-        Most felt: ${topEmotions || "No emotions logged"}</div>
+        Avg Mood: ${avgMood}/10 | Avg Energy: ${avgEnergy}/10 | Check-ins: ${checkins.length}</div>
       `;
     }
 
-    // Get cohort insights
     const response = await fetch(`${API_BASE}/symptoms/women-like-me`, {
       method: "POST",
       headers: authHeader(),
@@ -480,18 +460,34 @@ async function loadInsights(symptoms) {
       return;
     }
 
-    const topSymptoms = (data.top_symptoms || []).slice(0, 5)
+    const topSymptoms = (data.top_symptoms || []).slice(0, 6)
       .map((s) => `${s.canonical_symptom} (${s.count})`)
       .join("<br>");
-    const topTreatments = (data.top_treatments || []).slice(0, 5)
+    const topTreatments = (data.top_treatments || []).slice(0, 6)
       .map((t) => `${t.canonical_treatment} (${t.count})`)
+      .join("<br>");
+    const worked = (data.worked_best || []).slice(0, 5)
+      .map((t) => `${t.treatment} (score ${t.net_score})`)
+      .join("<br>");
+    const didntWork = (data.didnt_work_best || []).slice(0, 5)
+      .map((t) => `${t.treatment} (score ${t.net_score})`)
+      .join("<br>");
+    const recentPosts = (data.recent_community_posts || []).slice(0, 3)
+      .map((p) => `@${escapeHtml(p.username)}: ${escapeHtml(String(p.content).slice(0, 120))}${String(p.content).length > 120 ? "..." : ""}`)
       .join("<br>");
 
     root.innerHTML = personalStats + `
-      <div class="item"><strong>Women Like You (${data.similar_users} found)</strong><br>
-      Your symptoms: ${(data.input_symptoms || []).join(", ")}</div>
-      <div class="item"><strong>They Also Have</strong><br>${topSymptoms || "No data"}</div>
-      <div class="item"><strong>What Helped Them</strong><br>${topTreatments || "No data"}</div>
+      <div class="item"><strong>Your Menotype</strong><br>
+      ${escapeHtml(data.menotype?.name || "-")} (confidence ${(data.menotype?.confidence || 0).toFixed(2)})<br>
+      ${escapeHtml(data.menotype?.definition || "")}</div>
+      <div class="item"><strong>Women Like You</strong><br>
+      Similar community profiles: ${data.similar_users || 0}<br>
+      Input symptoms: ${(data.input_symptoms || []).join(", ")}</div>
+      <div class="item"><strong>Dominant Symptoms in Your Menotype</strong><br>${topSymptoms || "No data"}</div>
+      <div class="item"><strong>Dominant Treatments in Your Menotype</strong><br>${topTreatments || "No data"}</div>
+      <div class="item"><strong>Most Helpful Treatments (Community)</strong><br>${worked || "No data"}</div>
+      <div class="item"><strong>Often Not Helpful (Community)</strong><br>${didntWork || "No data"}</div>
+      <div class="item"><strong>Recent Community Posts</strong><br>${recentPosts || "No posts yet"}</div>
     `;
   } catch (err) {
     console.error("Error loading insights:", err);

@@ -29,7 +29,7 @@ app.use("/menotype", authenticateToken, menotypeRoutes);
 app.use("/checkins", authenticateToken, checkinsRoutes);
 app.use("/community", authenticateToken, communityRoutes);
 app.use("/auth", authRoutes);
-const PORT = 3000;
+const PORT = parseInt(process.env.PORT || "3000", 10);
 
 app.listen(PORT, () => {
   console.log(`WE Health API running on port ${PORT}`);
